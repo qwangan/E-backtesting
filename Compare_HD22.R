@@ -11,6 +11,7 @@ library("plotrix")
 library("nloptr")
 library("parallel")
 library("sgt")
+library("latex2exp")
 
 source("Rfns.R")
 source("Rfns_HD22.R")
@@ -563,7 +564,7 @@ par(mar = c(4.1, 4.1, 0, 2.1))
 matplot(seq(0,250,25), cbind(out.final$avg.rejVaR3.akelly[1:11], out.final$avg.rejVaR3.rkelly[1:11],
                              out.final$avg.rejVaR3.mix[1:11], out.final$avg.rejVaR.HD[1:11]),
         col=c("red", "blue", "darkgreen", "black"), type = "l", lty = 1,
-        xlab = "", ylab = "detection percentage (%)", xaxt = "n", cex.lab = 1.4, cex.axis = 1.4, pch = 16, lwd = c(1,1,1,1))
+        xlab = TeX('$b^*$'), ylab = "ARL", cex.lab = 1.4, cex.axis = 1.4, pch = 16, lwd = c(1,1,1,1))
 legend("topright", legend=c("GREE", "GREL", "GREM", "monitor"),
        col=c("red", "blue", "darkgreen", "black"), lwd = 1, cex=1)
 dev.off()
@@ -583,7 +584,7 @@ par(mar = c(4.1, 4.1, 0, 2.1))
 matplot(seq(0,250,25), cbind(out.final$avg.rejES3.akelly[1:11], out.final$avg.rejES3.rkelly[1:11],
                              out.final$avg.rejES3.mix[1:11], out.final$avg.rejES.HD[1:11]),
         col=c("red", "blue", "darkgreen", "black"), type = "l", lty = 1,
-        xlab = "", ylab = "detection percentage (%)", xaxt = "n", cex.lab = 1.4, cex.axis = 1.4, pch = 16, lwd = c(1,1,1,1))
+        xlab = TeX('$b^*$'), ylab = "ARL", cex.lab = 1.4, cex.axis = 1.4, pch = 16, lwd = c(1,1,1,1))
 legend("topright", legend=c("GREE", "GREL", "GREM", "monitor"),
        col=c("red", "blue", "darkgreen", "black"), lwd = 1, cex=1)
 dev.off()
