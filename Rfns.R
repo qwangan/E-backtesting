@@ -686,7 +686,61 @@ evalue.VaR <- function(x, r, lev=0.95)
               e.out.mix = e.out.mix, n.rej1.mix = n.rej1.mix, n.rej2.mix = n.rej2.mix, n.rej3.mix = n.rej3.mix))
 }
 
-# e-test for VaR with known alternative Q (GRO method)
+# e-test with constant lambda (for Type I error detection)
+
+evalue.VaR.con <- function(x, r, lev=0.95)
+{
+  n = length(x) # out-of-sample size
+  sf1 <- .5
+  sf2 <- .2
+  sf3 <- .1 # significance levels
+  
+  e.out.con <- c() # create a vector to store e-values for constant lambda
+  
+  # test martingale with lambda = lambda.c
+  lambda.c <- 0.01 # lambda we use for time series data
+  # lambda.c <- 0.025 # We use this lamabda for iid observations in Section 2.1 of "Simulation and data analysis for e-backtesting"
+  
+  # Initial e-value for constant lambda
+  e.con <- 1
+  
+  # Loop calculating the test martingale for constant lambda
+  i <- 1
+  n.rej1.con <- 0
+  n.rej2.con <- 0
+  n.rej3.con <- 0
+  d1 <- FALSE
+  d2 <- FALSE
+  d3 <- FALSE # dummmy variables
+  while(i <= (n)){
+    if(e.con <= (1/sf1) && d1 == FALSE){
+      n.rej1.con <- n.rej1.con+1
+    }
+    if(e.con > (1/sf1)){
+      d1 = TRUE
+    }
+    if(e.con <= (1/sf2) && d2 == FALSE){
+      n.rej2.con <- n.rej2.con+1
+    }
+    if(e.con > (1/sf2)){
+      d2 = TRUE
+    }
+    if(e.con <= (1/sf3) && d3 == FALSE){
+      n.rej3.con <- n.rej3.con+1
+    }
+    if(e.con > (1/sf3)){
+      d3 = TRUE
+    }
+    e.con <- e.con * (1 - lambda.c + lambda.c*EVaR(x=x[i],r=r[i],lev=lev))
+    e.out.con <- cbind(e.out.con, e.con)
+    i = i+1
+  }
+  
+  
+  return(list(e.out.con = e.out.con, n.rej1.con = n.rej1.con, n.rej2.con = n.rej2.con, n.rej3.con = n.rej3.con))
+}
+
+# e-test for VaR with known alternative Q normal (GRO method)
 
 evalue.VaRQ <- function(x, r, lev=0.95)
 {
@@ -1446,7 +1500,82 @@ evalue.ESQ <- function(x, r, z, lev=0.875)
   return(list(e.out.rkelly = e.out.rkelly, n.rej1.rkelly = n.rej1.rkelly, n.rej2.rkelly = n.rej2.rkelly, n.rej3.rkelly = n.rej3.rkelly, out.lambda.rkelly = out.lambda.rkelly))
 }
 
-# e-test for GRO method in Example 7
+
+# e-test for ES with known alternative Q AR-GARCH(1,1) (GRO method)
+
+evalue.ES.GARCH <- function(x, r, z, mut, sigt, lev=0.875)
+{
+  n = length(x) # out-of-sample size
+  sf1 <- .5
+  sf2 <- .2
+  sf3 <- .1 # significance levels
+  
+  e.out.rkelly <- c() # e-process
+  out.lambda.rkelly <- c() # output parameters
+  
+  # Initial e-value
+  e.rkelly <- 1
+  
+  # Loop calculating the test martingale
+  i <- 1
+  n.rej1.rkelly <- 0
+  n.rej2.rkelly <- 0
+  n.rej3.rkelly <- 0
+  d1 <- FALSE
+  d2 <- FALSE
+  d3 <- FALSE # dummmy variables
+  while(i <= (n)){
+    if(e.rkelly <= (1/sf1) && d1 == FALSE){
+      n.rej1.rkelly <- n.rej1.rkelly+1
+    }
+    if(e.rkelly > (1/sf1)){
+      d1 = TRUE
+    }
+    if(e.rkelly <= (1/sf2) && d2 == FALSE){
+      n.rej2.rkelly <- n.rej2.rkelly+1
+    }
+    if(e.rkelly > (1/sf2)){
+      d2 = TRUE
+    }
+    if(e.rkelly <= (1/sf3) && d3 == FALSE){
+      n.rej3.rkelly <- n.rej3.rkelly+1
+    }
+    if(e.rkelly > (1/sf3)){
+      d3 = TRUE
+    }
+    
+    # e-value
+    
+    # true parameters for skewed t rv
+    nu=5; ga=1.5
+    
+    f = function(pm){
+      function(x){
+        log(1-pm+pm*(pmax(x - z[i], 0))/((1-lev)*(r[i]-z[i])))*dsgt(x,mu=mut[i],sigma=sigt[i],lambda=(ga^2-1)/(ga^2+1),p=2,q=nu/2)
+      }
+    }
+    fun = function(pm){
+      integrate(f(pm), -Inf, Inf, rel.tol = 1e-2)$value
+    }
+    lambda = optimize(fun, interval = c(0,0.5), maximum = TRUE)$maximum
+    
+    e.rkelly <- e.rkelly * (1 - lambda + lambda * max(x[i] - z[i], 0) / ((1 - lev) * (r[i] - z[i])))
+    
+    
+    out.lambda.rkelly <- cbind(out.lambda.rkelly, lambda)
+    
+    e.out.rkelly <- cbind(e.out.rkelly, e.rkelly)
+    
+    
+    i = i+1
+  }
+  
+  
+  return(list(e.out.rkelly = e.out.rkelly, n.rej1.rkelly = n.rej1.rkelly, n.rej2.rkelly = n.rej2.rkelly, n.rej3.rkelly = n.rej3.rkelly, out.lambda.rkelly = out.lambda.rkelly))
+}
+
+
+# e-test for GRO method in Example 7 (normal)
 
 evalue.ESQ.eps <- function(x, r, z, eps, lev=0.875)
 {
@@ -1496,6 +1625,78 @@ evalue.ESQ.eps <- function(x, r, z, eps, lev=0.875)
     f = function(pm){
       function(x){
         log(1-pm+pm*(pmax(x * (1 + eps[i]) - z[i], 0))/((1-lev)*(r[i]-z[i])))*dnorm(x)
+      }
+    }
+    fun = function(pm){
+      integrate(f(pm), -Inf, Inf, rel.tol = 1e-2)$value
+    }
+    lambda = optimize(fun, interval = c(0,0.5), maximum = TRUE)$maximum
+    
+    e.rkelly <- e.rkelly * (1 - lambda + lambda * max(x[i] - z[i], 0) / ((1 - lev) * (r[i] - z[i])))
+    
+    
+    out.lambda.rkelly <- cbind(out.lambda.rkelly, lambda)
+    
+    e.out.rkelly <- cbind(e.out.rkelly, e.rkelly)
+    
+    i = i+1
+  }
+  
+  
+  return(list(e.out.rkelly = e.out.rkelly, n.rej1.rkelly = n.rej1.rkelly, n.rej2.rkelly = n.rej2.rkelly, n.rej3.rkelly = n.rej3.rkelly, out.lambda.rkelly = out.lambda.rkelly))
+}
+
+
+# e-test for GRO method in Example 7 (AR-GARCH(1,1))
+
+evalue.ES.GARCH.eps <- function(x, r, z, mut, sigt, eps, lev=0.875)
+{
+  n = length(x) # out-of-sample size
+  sf1 <- .5
+  sf2 <- .2
+  sf3 <- .1 # significance levels
+  
+  e.out.rkelly <- c() # e-process
+  out.lambda.rkelly <- c() # output parameters tuned
+  
+  # model-free e-statistic e_p
+  e <- (pmax(x - z, 0)) / ((1 - lev) * (r - z))
+  
+  # Initial e-value
+  e.rkelly <- 1
+  
+  # Loop calculating the test martingale
+  i <- 1
+  n.rej1.rkelly <- 0
+  n.rej2.rkelly <- 0
+  n.rej3.rkelly <- 0
+  d1 <- FALSE
+  d2 <- FALSE
+  d3 <- FALSE # dummmy variables
+  while(i <= (n)){
+    if(e.rkelly <= (1/sf1) && d1 == FALSE){
+      n.rej1.rkelly <- n.rej1.rkelly+1
+    }
+    if(e.rkelly > (1/sf1)){
+      d1 = TRUE
+    }
+    if(e.rkelly <= (1/sf2) && d2 == FALSE){
+      n.rej2.rkelly <- n.rej2.rkelly+1
+    }
+    if(e.rkelly > (1/sf2)){
+      d2 = TRUE
+    }
+    if(e.rkelly <= (1/sf3) && d3 == FALSE){
+      n.rej3.rkelly <- n.rej3.rkelly+1
+    }
+    if(e.rkelly > (1/sf3)){
+      d3 = TRUE
+    }
+    
+    # e-value
+    f = function(pm){
+      function(x){
+        log(1-pm+pm*(pmax(x * (1 + eps[i]) - z[i], 0))/((1-lev)*(r[i]-z[i])))*dsgt(x,mu=mut[i],sigma=sigt[i],lambda=(ga^2-1)/(ga^2+1),p=2,q=nu/2)
       }
     }
     fun = function(pm){

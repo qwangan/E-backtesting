@@ -64,6 +64,11 @@ simu <- function(iter){
   
   x=simdat[501:(n+1000)] # time series to be used for fitting and forecasting
   
+  # recovering the mu[t] and sig[t] used in the data generation
+  # keeping values relevant for the optimal forecast computations
+  mut=mut[1001:(n+1000)]
+  sigt=sigt[1001:(n+1000)]
+  
   
   # =======================================================
   # Normal innovations
@@ -210,17 +215,57 @@ simu <- function(iter){
   }
   
   
+  
+  # =======================================================
+  # true model (skewed-t innovations with true parameters)
+  # =======================================================
+  
+  VaR.true <- matrix(nrow=n,ncol=length(VaR.levels))
+  
+  ES.true <- matrix(nrow=n,ncol=length(nvec))
+    # mu = -.05, ar = .3, omega = .01, alpha = .1, beta = .85, skew = 1.5, shape = 5
+    
+    # true parameters for skewed t rv
+    nu=5; ga=1.5
+    
+    # calculate VaR of normalized skewed-t
+    qmodel = qsgt(VaR.levels,mu=0,sigma=1,lambda=(ga^2-1)/(ga^2+1),p=2,q=nu/2)
+    
+    esmodel = NULL # expected shortfall for the assumed model/distribution
+    
+    # parameters of Hansen (1994)
+    lam = -(ga^2-1)/(ga^2+1) # transfer from ga of Fernandez and Steel (1998) to lam of Hansen (1994)
+    # minus sign is taken because we change from loss to return
+    c = gamma((nu+1)/2) / (gamma(nu/2) * sqrt(pi * (nu-2)))
+    a = 4*lam*c*(nu-2)/(nu-1)
+    b = sqrt(1+3*lam^2-a^2)
+    
+    # Calculate explicit ES for skewed-t described in Patton et al. (2019)
+    for(j in inu){
+      # We make some transformation here because we are handling loss data
+      if(qmodel[j] >= (a/b)){
+        alpha_tilde1 = psgt(b/(1-lam)*(-qmodel[j]+a/b),mu=0,sigma=1,lambda=0,p=2,q=nu/2)
+        es_t1 = sqrt((nu-2)/nu) * nu^(nu/2)/(2*(alpha_tilde1)*sqrt(pi))*gamma((nu-1)/2)/gamma(nu/2)*(qt(1-alpha_tilde1, df=nu)^2+nu)^((1-nu)/2) # ES for standardized t distribution
+        esmodel = c(esmodel, -(alpha_tilde1)/(1-VaR.levels[j]) * (1-lam) * (-a/b - (1-lam)/b*es_t1))
+      }else{
+        lam2 = -lam
+        ga2 = 1/ga
+        nu2 = nu
+        c2 = c
+        a2 = 4*lam2*c2*(nu2-2)/(nu2-1)
+        b2 = b
+        alpha_tilde2 = psgt(b2/(1-lam2)*(qsgt(VaR.levels[j],mu=0,sigma=1,lambda=lam2,p=2,q=nu2/2)+a2/b2),mu=0,sigma=1,lambda=0,p=2,q=nu2/2)
+        es_t2 = sqrt((nu2-2)/nu2) * nu2^(nu2/2)/(2*(alpha_tilde2)*sqrt(pi))*gamma((nu2-1)/2)/gamma(nu2/2)*(qt(1-alpha_tilde2, df=nu2)^2+nu2)^((1-nu2)/2)
+        esmodel = c(esmodel, -(alpha_tilde2)/(1-VaR.levels[j]) * (1-lam2) * (-a2/b2 - (1-lam2)/b2*es_t2))
+      }
+    }
+    
+    VaR.true = t(mut + qmodel %*% t(sigt))
+    ES.true = t(mut + esmodel %*% t(sigt))
+  
+  
   # Data preparation
   
-  # Parameters
-  nu=5; xi=1.5
-  mst = mean.st(shape=nu,skew=xi) # mean and sd for optimal forecast computations
-  sst = sqrt(var.st(shape=nu,skew=xi))
-  
-  # recovering the mu[t] and sig[t] used in the data generation
-  # keeping values relevant for the optimal forecast computations
-  mut=mut[1001:(n+1000)]
-  sigt=sigt[1001:(n+1000)]
   
   # --------------------------------------------------------
   # Verifying observations on which to assess forecasts
@@ -234,14 +279,17 @@ simu <- function(iter){
   # VaR_alpha
   #=====================================================
   
-  levels = avec
-  VaRa=qsstd(p=levels[1],nu=nu,xi=xi)  # a-VaR for the innovation distribution
-  VaRopt=mut + sigt*VaRa
-  VaRout1 = rbind(VaR.norm[,1], VaR.t[,1], VaR.st[,1], VaRopt)
+  VaRout1 = rbind(VaR.norm[,1], VaR.t[,1], VaR.st[,1], VaR.true[,1])
+  VaRout2 = rbind(VaR.norm[,2], VaR.t[,2], VaR.st[,2], VaR.true[,2])
   
-  VaRa=qsstd(p=levels[2],nu=nu,xi=xi)  # a-VaR for the innovation distribution
-  VaRopt=mut + sigt*VaRa
-  VaRout2 = rbind(VaR.norm[,2], VaR.t[,2], VaR.st[,2], VaRopt)
+  # levels = avec
+  # VaRa=qsstd(p=levels[1],nu=nu,xi=xi)  # a-VaR for the innovation distribution
+  # VaRopt=mut + sigt*VaRa
+  # VaRout1 = rbind(VaR.norm[,1], VaR.t[,1], VaR.st[,1], VaRopt)
+  # 
+  # VaRa=qsstd(p=levels[2],nu=nu,xi=xi)  # a-VaR for the innovation distribution
+  # VaRopt=mut + sigt*VaRa
+  # VaRout2 = rbind(VaR.norm[,2], VaR.t[,2], VaR.st[,2], VaRopt)
   
   VaRout1 = VaRout1[1:4,1:(n)]
   VaRout2 = VaRout2[1:4,1:(n)]
@@ -251,29 +299,36 @@ simu <- function(iter){
   # (VaR_nu, ES_nu)
   #=====================================================
   
-  levels = nvec
-  VaRa = qskt(p=levels[1],df=nu,gamma=xi) # for skew t variable in standard form of the density
-  ESa=integrate(function(x) x*dskt(x, df=nu, gamma=xi), VaRa, Inf)$value/(1-levels[1])
+  VaRout1b = rbind(VaR.norm[,3], VaR.t[,3], VaR.st[,3], VaR.true[,3])
+  ESout1 = rbind(ES.norm[,1], ES.t[,1], ES.st[,1], ES.true[,1])
   
-  VaRa = (VaRa-mst)/sst
-  ESa=(ESa-mst)/sst # adjustment for skew t distribution with mean zero and sd=1
-  VaRopt=mut + sigt*VaRa
-  ESopt = mut + sigt*ESa
-  
-  VaRout1b = rbind(VaR.norm[,3], VaR.t[,3], VaR.st[,3], VaRopt)
-  ESout1 = rbind(ES.norm[,1], ES.t[,1], ES.st[,1], ESopt)
+  VaRout2b = rbind(VaR.norm[,4], VaR.t[,4], VaR.st[,4], VaR.true[,4])
+  ESout2 = rbind(ES.norm[,2], ES.t[,2], ES.st[,2], ES.true[,2])
   
   
-  VaRa = qskt(p=levels[2],df=nu,gamma=xi) # for skew t variable in standard form of the density
-  ESa=integrate(function(x) x*dskt(x, df=nu, gamma=xi), VaRa, Inf)$value/(1-levels[2])
-  
-  VaRa = (VaRa-mst)/sst
-  ESa=(ESa-mst)/sst # adjustment for skew t distribution with mean zero and sd=1
-  VaRopt=mut + sigt*VaRa
-  ESopt = mut + sigt*ESa
-  
-  VaRout2b = rbind(VaR.norm[,4], VaR.t[,4], VaR.st[,4], VaRopt)
-  ESout2 = rbind(ES.norm[,2], ES.t[,2], ES.st[,2], ESopt)
+  # levels = nvec
+  # VaRa = qskt(p=levels[1],df=nu,gamma=xi) # for skew t variable in standard form of the density
+  # ESa=integrate(function(x) x*dskt(x, df=nu, gamma=xi), VaRa, Inf)$value/(1-levels[1])
+  # 
+  # VaRa = (VaRa-mst)/sst
+  # ESa=(ESa-mst)/sst # adjustment for skew t distribution with mean zero and sd=1
+  # VaRopt=mut + sigt*VaRa
+  # ESopt = mut + sigt*ESa
+  # 
+  # VaRout1b = rbind(VaR.norm[,3], VaR.t[,3], VaR.st[,3], VaRopt)
+  # ESout1 = rbind(ES.norm[,1], ES.t[,1], ES.st[,1], ESopt)
+  # 
+  # 
+  # VaRa = qskt(p=levels[2],df=nu,gamma=xi) # for skew t variable in standard form of the density
+  # ESa=integrate(function(x) x*dskt(x, df=nu, gamma=xi), VaRa, Inf)$value/(1-levels[2])
+  # 
+  # VaRa = (VaRa-mst)/sst
+  # ESa=(ESa-mst)/sst # adjustment for skew t distribution with mean zero and sd=1
+  # VaRopt=mut + sigt*VaRa
+  # ESopt = mut + sigt*ESa
+  # 
+  # VaRout2b = rbind(VaR.norm[,4], VaR.t[,4], VaR.st[,4], VaRopt)
+  # ESout2 = rbind(ES.norm[,2], ES.t[,2], ES.st[,2], ESopt)
   
   
   VaRout1b = VaRout1b[1:4,1:(n)]; ESout1 = ESout1[1:4,1:(n)]
@@ -292,7 +347,7 @@ simu <- function(iter){
   
   err <- .1 # error for under- and over-reporting
   w <- 0 # time window
-  nm = 3
+  nm = 4
   
   ### summary for VaR
   fcVaR = c(rowMeans(VaRout1), rowMeans(VaRout2)) # VaR forecast
@@ -532,77 +587,78 @@ save(out, file="Result_simulation.RDATA")
 
 
 # Output values
+nm=4
 avg.total = c()
-for(i in 1:(1368+48*n)){
+for(i in 1:((454+16*n)*nm)){
   avg = mean(out[,i][out[,i] != n])
   avg.total = cbind(avg.total, avg)
 }
-avg.fcVaR = matrix(avg.total[1:8],nrow=8,ncol=1)  # VaR forecast
-avg.eVaR.con = matrix(avg.total[9:26],nrow=6,ncol=3)
-avg.eVaR.akelly = matrix(avg.total[27:44],nrow=6,ncol=3)
-avg.eVaR.rkelly = matrix(avg.total[45:62],nrow=6,ncol=3)
-avg.eVaR.mix = matrix(avg.total[63:80],nrow=6,ncol=3) # final e-values for VaR
-avg.rejVaR1.con = matrix(avg.total[81:98],nrow=6,ncol=3)
-avg.rejVaR1.akelly = matrix(avg.total[99:116],nrow=6,ncol=3)
-avg.rejVaR1.rkelly = matrix(avg.total[117:134],nrow=6,ncol=3)
-avg.rejVaR1.mix = matrix(avg.total[135:152],nrow=6,ncol=3) # numbers of days where we reject for VaR (threshold 2)
-avg.rejVaR2.con = matrix(avg.total[153:170],nrow=6,ncol=3)
-avg.rejVaR2.akelly = matrix(avg.total[171:188],nrow=6,ncol=3)
-avg.rejVaR2.rkelly = matrix(avg.total[189:206],nrow=6,ncol=3)
-avg.rejVaR2.mix = matrix(avg.total[207:224],nrow=6,ncol=3) # numbers of days where we reject for VaR (threshold 5)
-avg.rejVaR3.con = matrix(avg.total[225:242],nrow=6,ncol=3)
-avg.rejVaR3.akelly = matrix(avg.total[243:260],nrow=6,ncol=3)
-avg.rejVaR3.rkelly = matrix(avg.total[261:278],nrow=6,ncol=3)
-avg.rejVaR3.mix = matrix(avg.total[279:296],nrow=6,ncol=3) # numbers of days where we reject for VaR (threshold 10)
-avg.rejnumVaR1.con = matrix(avg.total[297:314],nrow=6,ncol=3)
-avg.rejnumVaR1.akelly = matrix(avg.total[315:332],nrow=6,ncol=3)
-avg.rejnumVaR1.rkelly = matrix(avg.total[333:350],nrow=6,ncol=3)
-avg.rejnumVaR1.mix = matrix(avg.total[351:368],nrow=6,ncol=3) # numbers of rejections for VaR (threshold 2)
-avg.rejnumVaR2.con = matrix(avg.total[369:386],nrow=6,ncol=3)
-avg.rejnumVaR2.akelly = matrix(avg.total[387:404],nrow=6,ncol=3)
-avg.rejnumVaR2.rkelly = matrix(avg.total[405:422],nrow=6,ncol=3)
-avg.rejnumVaR2.mix = matrix(avg.total[423:440],nrow=6,ncol=3) # numbers of rejections for VaR (threshold 5)
-avg.rejnumVaR3.con = matrix(avg.total[441:458],nrow=6,ncol=3)
-avg.rejnumVaR3.akelly = matrix(avg.total[459:476],nrow=6,ncol=3)
-avg.rejnumVaR3.rkelly = matrix(avg.total[477:494],nrow=6,ncol=3)
-avg.rejnumVaR3.mix = matrix(avg.total[495:512],nrow=6,ncol=3) # numbers of rejections for VaR (threshold 10)
-avg.tmVaR.con = matrix(avg.total[513:(512+6*n)],nrow=6,ncol=n)
-avg.tmVaR.akelly = matrix(avg.total[(513+6*n):(512+12*n)],nrow=6,ncol=n)
-avg.tmVaR.rkelly = matrix(avg.total[(513+12*n):(512+18*n)],nrow=6,ncol=n)
-avg.tmVaR.mix = matrix(avg.total[(513+18*n):(512+24*n)],nrow=6,ncol=n) # sequential test martingale for VaR
-avg.fcES = matrix(avg.total[(513+24*n):(528+24*n)],nrow=8,ncol=2) # VaR-ES forecast
-avg.eES.con = matrix(avg.total[(529+24*n):(558+24*n)],nrow=6,ncol=5)
-avg.eES.akelly = matrix(avg.total[(559+24*n):(588+24*n)],nrow=6,ncol=5)
-avg.eES.rkelly = matrix(avg.total[(589+24*n):(618+24*n)],nrow=6,ncol=5)
-avg.eES.mix = matrix(avg.total[(619+24*n):(648+24*n)],nrow=6,ncol=5) # final e-values for ES
-avg.rejES1.con = matrix(avg.total[(649+24*n):(678+24*n)],nrow=6,ncol=5)
-avg.rejES1.akelly = matrix(avg.total[(679+24*n):(708+24*n)],nrow=6,ncol=5)
-avg.rejES1.rkelly = matrix(avg.total[(709+24*n):(738+24*n)],nrow=6,ncol=5)
-avg.rejES1.mix = matrix(avg.total[(739+24*n):(768+24*n)],nrow=6,ncol=5) # numbers of days where we reject for ES (threshold 2)
-avg.rejES2.con = matrix(avg.total[(769+24*n):(798+24*n)],nrow=6,ncol=5)
-avg.rejES2.akelly = matrix(avg.total[(799+24*n):(828+24*n)],nrow=6,ncol=5)
-avg.rejES2.rkelly = matrix(avg.total[(829+24*n):(858+24*n)],nrow=6,ncol=5)
-avg.rejES2.mix = matrix(avg.total[(859+24*n):(888+24*n)],nrow=6,ncol=5) # numbers of days where we reject for ES (threshold 5)
-avg.rejES3.con = matrix(avg.total[(889+24*n):(918+24*n)],nrow=6,ncol=5)
-avg.rejES3.akelly = matrix(avg.total[(919+24*n):(948+24*n)],nrow=6,ncol=5)
-avg.rejES3.rkelly = matrix(avg.total[(949+24*n):(978+24*n)],nrow=6,ncol=5)
-avg.rejES3.mix = matrix(avg.total[(979+24*n):(1008+24*n)],nrow=6,ncol=5) # numbers of days where we reject for ES (threshold 10)
-avg.rejnumES1.con = matrix(avg.total[(1009+24*n):(1038+24*n)],nrow=6,ncol=5)
-avg.rejnumES1.akelly = matrix(avg.total[(1039+24*n):(1068+24*n)],nrow=6,ncol=5)
-avg.rejnumES1.rkelly = matrix(avg.total[(1069+24*n):(1098+24*n)],nrow=6,ncol=5)
-avg.rejnumES1.mix = matrix(avg.total[(1099+24*n):(1128+24*n)],nrow=6,ncol=5) # numbers of rejections for ES (threshold 2)
-avg.rejnumES2.con = matrix(avg.total[(1129+24*n):(1158+24*n)],nrow=6,ncol=5)
-avg.rejnumES2.akelly = matrix(avg.total[(1159+24*n):(1188+24*n)],nrow=6,ncol=5)
-avg.rejnumES2.rkelly = matrix(avg.total[(1189+24*n):(1218+24*n)],nrow=6,ncol=5)
-avg.rejnumES2.mix = matrix(avg.total[(1219+24*n):(1248+24*n)],nrow=6,ncol=5) # numbers of rejections for ES (threshold 5)
-avg.rejnumES3.con = matrix(avg.total[(1249+24*n):(1278+24*n)],nrow=6,ncol=5)
-avg.rejnumES3.akelly = matrix(avg.total[(1279+24*n):(1308+24*n)],nrow=6,ncol=5)
-avg.rejnumES3.rkelly = matrix(avg.total[(1309+24*n):(1338+24*n)],nrow=6,ncol=5)
-avg.rejnumES3.mix = matrix(avg.total[(1339+24*n):(1368+24*n)],nrow=6,ncol=5) # numbers of rejections for ES (threshold 10)
-avg.tmES.con = matrix(avg.total[(1369+24*n):(1368+30*n)],nrow=6,ncol=n)
-avg.tmES.akelly = matrix(avg.total[(1369+30*n):(1368+36*n)],nrow=6,ncol=n)
-avg.tmES.rkelly = matrix(avg.total[(1369+36*n):(1368+42*n)],nrow=6,ncol=n)
-avg.tmES.mix = matrix(avg.total[(1369+42*n):(1368+48*n)],nrow=6,ncol=n) # sequential test martingale for ES
+avg.fcVaR = matrix(avg.total[1:(2*nm)],nrow=2*nm,ncol=1)  # VaR forecast
+avg.eVaR.con = matrix(avg.total[(2*nm+1):(8*nm)],nrow=2*nm,ncol=3)
+avg.eVaR.akelly = matrix(avg.total[(8*nm+1):(14*nm)],nrow=2*nm,ncol=3)
+avg.eVaR.rkelly = matrix(avg.total[(14*nm+1):(20*nm)],nrow=2*nm,ncol=3)
+avg.eVaR.mix = matrix(avg.total[(20*nm+1):(26*nm)],nrow=2*nm,ncol=3) # final e-values for VaR
+avg.rejVaR1.con = matrix(avg.total[(26*nm+1):(32*nm)],nrow=2*nm,ncol=3)
+avg.rejVaR1.akelly = matrix(avg.total[(32*nm+1):(38*nm)],nrow=2*nm,ncol=3)
+avg.rejVaR1.rkelly = matrix(avg.total[(38*nm+1):(44*nm)],nrow=2*nm,ncol=3)
+avg.rejVaR1.mix = matrix(avg.total[(44*nm+1):(50*nm)],nrow=2*nm,ncol=3) # numbers of days where we reject for VaR (threshold 2)
+avg.rejVaR2.con = matrix(avg.total[(50*nm+1):(56*nm)],nrow=2*nm,ncol=3)
+avg.rejVaR2.akelly = matrix(avg.total[(56*nm+1):(62*nm)],nrow=2*nm,ncol=3)
+avg.rejVaR2.rkelly = matrix(avg.total[(62*nm+1):(68*nm)],nrow=2*nm,ncol=3)
+avg.rejVaR2.mix = matrix(avg.total[(68*nm+1):(74*nm)],nrow=2*nm,ncol=3) # numbers of days where we reject for VaR (threshold 5)
+avg.rejVaR3.con = matrix(avg.total[(74*nm+1):(80*nm)],nrow=2*nm,ncol=3)
+avg.rejVaR3.akelly = matrix(avg.total[(80*nm+1):(86*nm)],nrow=2*nm,ncol=3)
+avg.rejVaR3.rkelly = matrix(avg.total[(86*nm+1):(92*nm)],nrow=2*nm,ncol=3)
+avg.rejVaR3.mix = matrix(avg.total[(92*nm+1):(98*nm)],nrow=2*nm,ncol=3) # numbers of days where we reject for VaR (threshold 10)
+avg.rejnumVaR1.con = matrix(avg.total[(98*nm+1):(104*nm)],nrow=2*nm,ncol=3)
+avg.rejnumVaR1.akelly = matrix(avg.total[(104*nm+1):(110*nm)],nrow=2*nm,ncol=3)
+avg.rejnumVaR1.rkelly = matrix(avg.total[(110*nm+1):(116*nm)],nrow=2*nm,ncol=3)
+avg.rejnumVaR1.mix = matrix(avg.total[(116*nm+1):(122*nm)],nrow=2*nm,ncol=3) # numbers of rejections for VaR (threshold 2)
+avg.rejnumVaR2.con = matrix(avg.total[(122*nm+1):(128*nm)],nrow=2*nm,ncol=3)
+avg.rejnumVaR2.akelly = matrix(avg.total[(128*nm+1):(134*nm)],nrow=2*nm,ncol=3)
+avg.rejnumVaR2.rkelly = matrix(avg.total[(134*nm+1):(140*nm)],nrow=2*nm,ncol=3)
+avg.rejnumVaR2.mix = matrix(avg.total[(140*nm+1):(146*nm)],nrow=2*nm,ncol=3) # numbers of rejections for VaR (threshold 5)
+avg.rejnumVaR3.con = matrix(avg.total[(146*nm+1):(152*nm)],nrow=2*nm,ncol=3)
+avg.rejnumVaR3.akelly = matrix(avg.total[(152*nm+1):(158*nm)],nrow=2*nm,ncol=3)
+avg.rejnumVaR3.rkelly = matrix(avg.total[(158*nm+1):(164*nm)],nrow=2*nm,ncol=3)
+avg.rejnumVaR3.mix = matrix(avg.total[(164*nm+1):(170*nm)],nrow=2*nm,ncol=3) # numbers of rejections for VaR (threshold 10)
+avg.tmVaR.con = matrix(avg.total[(170*nm+1):((170+2*n)*nm)],nrow=2*nm,ncol=n)
+avg.tmVaR.akelly = matrix(avg.total[((170+2*n)*nm+1):((170+4*n)*nm)],nrow=2*nm,ncol=n)
+avg.tmVaR.rkelly = matrix(avg.total[((170+4*n)*nm+1):((170+6*n)*nm)],nrow=2*nm,ncol=n)
+avg.tmVaR.mix = matrix(avg.total[((170+6*n)*nm+1):((170+8*n)*nm)],nrow=2*nm,ncol=n) # sequential test martingale for VaR
+avg.fcES = matrix(avg.total[((170+8*n)*nm+1):((174+8*n)*nm)],nrow=2*nm,ncol=2) # VaR-ES forecast
+avg.eES.con = matrix(avg.total[((174+8*n)*nm+1):((184+8*n)*nm)],nrow=2*nm,ncol=5)
+avg.eES.akelly = matrix(avg.total[((184+8*n)*nm+1):((194+8*n)*nm)],nrow=2*nm,ncol=5)
+avg.eES.rkelly = matrix(avg.total[((194+8*n)*nm+1):((204+8*n)*nm)],nrow=2*nm,ncol=5)
+avg.eES.mix = matrix(avg.total[((204+8*n)*nm+1):((214+8*n)*nm)],nrow=2*nm,ncol=5) # final e-values for ES
+avg.rejES1.con = matrix(avg.total[((214+8*n)*nm+1):((224+8*n)*nm)],nrow=2*nm,ncol=5)
+avg.rejES1.akelly = matrix(avg.total[((224+8*n)*nm+1):((234+8*n)*nm)],nrow=2*nm,ncol=5)
+avg.rejES1.rkelly = matrix(avg.total[((234+8*n)*nm+1):((244+8*n)*nm)],nrow=2*nm,ncol=5)
+avg.rejES1.mix = matrix(avg.total[((244+8*n)*nm+1):((254+8*n)*nm)],nrow=2*nm,ncol=5) # numbers of days where we reject for ES (threshold 2)
+avg.rejES2.con = matrix(avg.total[((254+8*n)*nm+1):((264+8*n)*nm)],nrow=2*nm,ncol=5)
+avg.rejES2.akelly = matrix(avg.total[((264+8*n)*nm+1):((274+8*n)*nm)],nrow=2*nm,ncol=5)
+avg.rejES2.rkelly = matrix(avg.total[((274+8*n)*nm+1):((284+8*n)*nm)],nrow=2*nm,ncol=5)
+avg.rejES2.mix = matrix(avg.total[((284+8*n)*nm+1):((294+8*n)*nm)],nrow=2*nm,ncol=5) # numbers of days where we reject for ES (threshold 5)
+avg.rejES3.con = matrix(avg.total[((294+8*n)*nm+1):((304+8*n)*nm)],nrow=2*nm,ncol=5)
+avg.rejES3.akelly = matrix(avg.total[((304+8*n)*nm+1):((314+8*n)*nm)],nrow=2*nm,ncol=5)
+avg.rejES3.rkelly = matrix(avg.total[((314+8*n)*nm+1):((324+8*n)*nm)],nrow=2*nm,ncol=5)
+avg.rejES3.mix = matrix(avg.total[((324+8*n)*nm+1):((334+8*n)*nm)],nrow=2*nm,ncol=5) # numbers of days where we reject for ES (threshold 10)
+avg.rejnumES1.con = matrix(avg.total[((334+8*n)*nm+1):((344+8*n)*nm)],nrow=2*nm,ncol=5)
+avg.rejnumES1.akelly = matrix(avg.total[((344+8*n)*nm+1):((354+8*n)*nm)],nrow=2*nm,ncol=5)
+avg.rejnumES1.rkelly = matrix(avg.total[((354+8*n)*nm+1):((364+8*n)*nm)],nrow=2*nm,ncol=5)
+avg.rejnumES1.mix = matrix(avg.total[((364+8*n)*nm+1):((374+8*n)*nm)],nrow=2*nm,ncol=5) # numbers of rejections for ES (threshold 2)
+avg.rejnumES2.con = matrix(avg.total[((374+8*n)*nm+1):((384+8*n)*nm)],nrow=2*nm,ncol=5)
+avg.rejnumES2.akelly = matrix(avg.total[((384+8*n)*nm+1):((394+8*n)*nm)],nrow=2*nm,ncol=5)
+avg.rejnumES2.rkelly = matrix(avg.total[((394+8*n)*nm+1):((404+8*n)*nm)],nrow=2*nm,ncol=5)
+avg.rejnumES2.mix = matrix(avg.total[((404+8*n)*nm+1):((414+8*n)*nm)],nrow=2*nm,ncol=5) # numbers of rejections for ES (threshold 5)
+avg.rejnumES3.con = matrix(avg.total[((414+8*n)*nm+1):((424+8*n)*nm)],nrow=2*nm,ncol=5)
+avg.rejnumES3.akelly = matrix(avg.total[((424+8*n)*nm+1):((434+8*n)*nm)],nrow=2*nm,ncol=5)
+avg.rejnumES3.rkelly = matrix(avg.total[((434+8*n)*nm+1):((444+8*n)*nm)],nrow=2*nm,ncol=5)
+avg.rejnumES3.mix = matrix(avg.total[((444+8*n)*nm+1):((454+8*n)*nm)],nrow=2*nm,ncol=5) # numbers of rejections for ES (threshold 10)
+avg.tmES.con = matrix(avg.total[((454+8*n)*nm+1):((454+10*n)*nm)],nrow=2*nm,ncol=n)
+avg.tmES.akelly = matrix(avg.total[((454+10*n)*nm+1):((454+12*n)*nm)],nrow=2*nm,ncol=n)
+avg.tmES.rkelly = matrix(avg.total[((454+12*n)*nm+1):((454+14*n)*nm)],nrow=2*nm,ncol=n)
+avg.tmES.mix = matrix(avg.total[((454+14*n)*nm+1):((454+16*n)*nm)],nrow=2*nm,ncol=n) # sequential test martingale for ES
 
 
 out.final = list(avg.fcVaR = avg.fcVaR, avg.eVaR.con = avg.eVaR.con, avg.eVaR.akelly = avg.eVaR.akelly, avg.eVaR.rkelly = avg.eVaR.rkelly, avg.eVaR.mix = avg.eVaR.mix,
@@ -613,7 +669,7 @@ out.final = list(avg.fcVaR = avg.fcVaR, avg.eVaR.con = avg.eVaR.con, avg.eVaR.ak
                  avg.rejnumVaR2.con= avg.rejnumVaR2.con, avg.rejnumVaR2.akelly = avg.rejnumVaR2.akelly, avg.rejnumVaR2.rkelly = avg.rejnumVaR2.rkelly, avg.rejnumVaR2.mix = avg.rejnumVaR2.mix,
                  avg.rejnumVaR3.con= avg.rejnumVaR3.con, avg.rejnumVaR3.akelly = avg.rejnumVaR3.akelly, avg.rejnumVaR3.rkelly = avg.rejnumVaR3.rkelly, avg.rejnumVaR3.mix = avg.rejnumVaR3.mix,
                  avg.tmVaR.con = avg.tmVaR.con, avg.tmVaR.akelly = avg.tmVaR.akelly, avg.tmVaR.rkelly = avg.tmVaR.rkelly, avg.tmVaR.mix = avg.tmVaR.mix,
-                 avg.eES.con = avg.eES.con, avg.eES.akelly = avg.eES.akelly, avg.eES.rkelly = avg.eES.rkelly, avg.eES.mix = avg.eES.mix,
+                 avg.fcES = avg.fcES, avg.eES.con = avg.eES.con, avg.eES.akelly = avg.eES.akelly, avg.eES.rkelly = avg.eES.rkelly, avg.eES.mix = avg.eES.mix,
                  avg.rejES1.con = avg.rejES1.con, avg.rejES1.akelly = avg.rejES1.akelly, avg.rejES1.rkelly = avg.rejES1.rkelly, avg.rejES1.mix = avg.rejES1.mix,
                  avg.rejES2.con = avg.rejES2.con, avg.rejES2.akelly = avg.rejES2.akelly, avg.rejES2.rkelly = avg.rejES2.rkelly, avg.rejES2.mix = avg.rejES2.mix,
                  avg.rejES3.con = avg.rejES3.con, avg.rejES3.akelly = avg.rejES3.akelly, avg.rejES3.rkelly = avg.rejES3.rkelly, avg.rejES3.mix = avg.rejES3.mix,
@@ -701,7 +757,7 @@ dev.off()
 
 setEPS()
 postscript("VaR99con.eps")
-matplot(1:500, cbind(out.final$avg.tmVaR.con[4,1:500], out.final$avg.tmVaR.con[5,1:500], out.final$avg.tmVaR.con[6,1:500]),
+matplot(1:500, cbind(out.final$avg.tmVaR.con[5,1:500], out.final$avg.tmVaR.con[6,1:500], out.final$avg.tmVaR.con[7,1:500]),
         ylim=e.lim, col=c("blue", "red", "black"),  type = "l", lty = 1,
         xlab = "number of days", ylab = "e-process", cex.lab = 1.4, cex.axis = 1.4, pch = 16, lwd = c(1,1,1))
 legend("topleft", legend=c("normal", "t", "skewed-t"),
@@ -725,7 +781,7 @@ dev.off()
 
 setEPS()
 postscript("VaR99akelly.eps")
-matplot(1:500, cbind(out.final$avg.tmVaR.akelly[4,1:500], out.final$avg.tmVaR.akelly[5,1:500], out.final$avg.tmVaR.akelly[6,1:500]),
+matplot(1:500, cbind(out.final$avg.tmVaR.akelly[5,1:500], out.final$avg.tmVaR.akelly[6,1:500], out.final$avg.tmVaR.akelly[7,1:500]),
         ylim=e.lim, col=c("blue", "red", "black"), type = "l", lty = 1,
         xlab = "number of days", ylab = "e-process", cex.lab = 1.4, cex.axis = 1.4, pch = 16, lwd = c(1,1,1))
 legend("topleft", legend=c("normal", "t", "skewed-t"),
@@ -749,7 +805,7 @@ dev.off()
 
 setEPS()
 postscript("VaR99rkelly.eps")
-matplot(1:500, cbind(out.final$avg.tmVaR.rkelly[4,1:500], out.final$avg.tmVaR.rkelly[5,1:500], out.final$avg.tmVaR.rkelly[6,1:500]),
+matplot(1:500, cbind(out.final$avg.tmVaR.rkelly[5,1:500], out.final$avg.tmVaR.rkelly[6,1:500], out.final$avg.tmVaR.rkelly[7,1:500]),
         ylim=e.lim, col=c("blue", "red", "black"), type = "l", lty = 1,
         xlab = "number of days", ylab = "e-process", cex.lab = 1.4, cex.axis = 1.4, pch = 16, lwd = c(1,1,1))
 legend("topleft", legend=c("normal", "t", "skewed-t"),
@@ -773,7 +829,7 @@ dev.off()
 
 setEPS()
 postscript("VaR99mix.eps")
-matplot(1:500, cbind(out.final$avg.tmVaR.mix[4,1:500], out.final$avg.tmVaR.mix[5,1:500], out.final$avg.tmVaR.mix[6,1:500]),
+matplot(1:500, cbind(out.final$avg.tmVaR.mix[5,1:500], out.final$avg.tmVaR.mix[6,1:500], out.final$avg.tmVaR.mix[7,1:500]),
         ylim=e.lim, col=c("blue", "red", "black"), type = "l", lty = 1,
         xlab = "number of days", ylab = "e-process", cex.lab = 1.4, cex.axis = 1.4, pch = 16, lwd = c(1,1,1))
 legend("topleft", legend=c("normal", "t", "skewed-t"),
@@ -799,7 +855,7 @@ dev.off()
 
 setEPS()
 postscript("ES975con.eps")
-matplot(1:500, cbind(out.final$avg.tmES.con[4,1:500], out.final$avg.tmES.con[5,1:500], out.final$avg.tmES.con[6,1:500]),
+matplot(1:500, cbind(out.final$avg.tmES.con[5,1:500], out.final$avg.tmES.con[6,1:500], out.final$avg.tmES.con[7,1:500]),
         ylim=e.lim, col=c("blue", "red", "black"),  type = "l", lty = 1,
         xlab = "number of days", ylab = "e-process", cex.lab = 1.4, cex.axis = 1.4, pch = 16, lwd = c(1,1,1))
 legend("topleft", legend=c("normal", "t", "skewed-t"),
@@ -823,7 +879,7 @@ dev.off()
 
 setEPS()
 postscript("ES975akelly.eps")
-matplot(1:500, cbind(out.final$avg.tmES.akelly[4,1:500], out.final$avg.tmES.akelly[5,1:500], out.final$avg.tmES.akelly[6,1:500]),
+matplot(1:500, cbind(out.final$avg.tmES.akelly[5,1:500], out.final$avg.tmES.akelly[6,1:500], out.final$avg.tmES.akelly[7,1:500]),
         ylim=e.lim, col=c("blue", "red", "black"), type = "l", lty = 1,
         xlab = "number of days", ylab = "e-process", cex.lab = 1.4, cex.axis = 1.4, pch = 16, lwd = c(1,1,1))
 legend("topleft", legend=c("normal", "t", "skewed-t"),
@@ -848,7 +904,7 @@ dev.off()
 
 setEPS()
 postscript("ES975rkelly.eps")
-matplot(1:500, cbind(out.final$avg.tmES.rkelly[4,1:500], out.final$avg.tmES.rkelly[5,1:500], out.final$avg.tmES.rkelly[6,1:500]),
+matplot(1:500, cbind(out.final$avg.tmES.rkelly[5,1:500], out.final$avg.tmES.rkelly[6,1:500], out.final$avg.tmES.rkelly[7,1:500]),
         ylim=e.lim, col=c("blue", "red", "black"), type = "l", lty = 1,
         xlab = "number of days", ylab = "e-process", cex.lab = 1.4, cex.axis = 1.4, pch = 16, lwd = c(1,1,1))
 legend("topleft", legend=c("normal", "t", "skewed-t"),
@@ -872,7 +928,7 @@ dev.off()
 
 setEPS()
 postscript("ES975mix.eps")
-matplot(1:500, cbind(out.final$avg.tmES.mix[4,1:500], out.final$avg.tmES.mix[5,1:500], out.final$avg.tmES.mix[6,1:500]),
+matplot(1:500, cbind(out.final$avg.tmES.mix[5,1:500], out.final$avg.tmES.mix[6,1:500], out.final$avg.tmES.mix[7,1:500]),
         ylim=e.lim, col=c("blue", "red", "black"), type = "l", lty = 1,
         xlab = "number of days", ylab = "e-process", cex.lab = 1.4, cex.axis = 1.4, pch = 16, lwd = c(1,1,1))
 legend("topleft", legend=c("normal", "t", "skewed-t"),

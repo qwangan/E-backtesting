@@ -55,7 +55,7 @@ simu <- function(iter) {
   ESout = rbind(ESout, rep(normES[2], length(y)))
   
   
-  # e-testing
+  # testing procedure
   
   err <- .1 # error for under- and over-reporting
   w <- 0 # time window
